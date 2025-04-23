@@ -20,13 +20,13 @@ private:
 
 public:
     // --- Constructors ---
-    Tensor(const std::vector<int>& shape, bool requires_grad = false);
-    Tensor(const std::vector<int>& shape, const std::vector<float>& data, bool requires_grad = false);
-
+    Tensor(const std::vector<int>& shape, const std::vector<float>& data, bool requires_grad = true);
+    Tensor(const std::vector<int>& shape, bool requires_grad = true);
     // --- Getters ---
     size_t compute_size() const;
     const std::vector<float>& data() const;
     const std::vector<float>& grad() const; // Const getter
+    std::vector<float>& data(); // Non-const getter for data
     std::vector<float>& grad(); // Non-const getter
     const std::vector<int>& shape() const;
     bool requires_grad() const;
@@ -34,7 +34,10 @@ public:
     // --- Setters / Modifiers ---
      void set_requires_grad(bool req_grad);
      void zero_grad();
+     void one_grad();
 
+    void add_dependency(std::shared_ptr<Tensor> dep);
+    void set_backward_fn(std::function<void()> fn);
     // --- Autograd ---
     void backward();
 
