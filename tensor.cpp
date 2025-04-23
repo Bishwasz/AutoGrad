@@ -8,26 +8,35 @@
 #include <unordered_set>// For backward topological sort visited set
 #include <vector>       // Needed again for implementation details
 
-// --- Constructor Implementations ---
-Tensor::Tensor(const std::vector<int>& shape, bool requires_grad)
+// --- Constructor Implementations --
+
+Tensor::Tensor(const std::vector<int>& shape, const std::vector<float>& data, bool requires_grad)
     : shape_(shape), requires_grad_(requires_grad) {
     size_t size = compute_size();
-    data_ = std::make_unique<std::vector<float>>(size, 0.0f);
+    if (data.size() != size) {
+        std::string shape_str;
+        for (size_t i = 0; i < shape_.size(); ++i) {
+            shape_str += std::to_string(shape_[i]) + (i == shape_.size() - 1 ? "" : ", ");
+        }
+        throw std::runtime_error("Data size (" + std::to_string(data.size()) + ") does not match shape [" + shape_str + "] which requires size " + std::to_string(size));
+    }
+    data_ = std::make_unique<std::vector<float>>(data);
     if (requires_grad_) {
         grad_ = std::make_unique<std::vector<float>>(size, 0.0f);
     }
 }
 
-Tensor::Tensor(const std::vector<int>& shape, const std::vector<float>& data, bool requires_grad)
+Tensor::Tensor(const std::vector<int>& shape, bool requires_grad)
     : shape_(shape), requires_grad_(requires_grad) {
-    data_ = std::make_unique<std::vector<float>>(data);
-    if (data_->size() != compute_size()) {
-        std::string shape_str;
-        for(size_t i=0; i<shape_.size(); ++i) shape_str += std::to_string(shape_[i]) + (i == shape_.size()-1 ? "" : ", ");
-        throw std::runtime_error("Data size (" + std::to_string(data_->size()) + ") does not match shape [" + shape_str + "] which requires size " + std::to_string(compute_size()));
+    for (int dim : shape_) {
+        if (dim < 0) {
+            throw std::runtime_error("Negative dimension in shape");
+        }
     }
+    size_t size = compute_size();
+    data_ = std::make_unique<std::vector<float>>(size, 0.0f);
     if (requires_grad_) {
-        grad_ = std::make_unique<std::vector<float>>(data_->size(), 0.0f);
+        grad_ = std::make_unique<std::vector<float>>(size, 0.0f);
     }
 }
 
@@ -41,6 +50,21 @@ size_t Tensor::compute_size() const {
 const std::vector<float>& Tensor::data() const {
      if (!data_) { throw std::runtime_error("Tensor data is null"); }
     return *data_;
+}
+std::vector<float>& Tensor::data() {
+    if (!data_) {
+        throw std::runtime_error("Tensor data is null (non-const access)");
+    }
+    return *data_;
+}
+void Tensor::add_dependency(std::shared_ptr<Tensor> dep) {
+    if (dep) {
+        dependencies_.push_back(dep);
+    }
+}
+
+void Tensor::set_backward_fn(std::function<void()> fn) {
+    backward_fn_ = std::move(fn);
 }
 
 // Const grad getter
@@ -88,6 +112,11 @@ void Tensor::zero_grad() {
         std::fill(grad_->begin(), grad_->end(), 0.0f);
     }
 }
+void Tensor::one_grad() {
+    if (requires_grad_ && grad_) {
+        std::fill(grad_->begin(), grad_->end(), 1.0f);
+    }
+}
 
 // --- Autograd Implementation ---
 void Tensor::backward() {
@@ -99,24 +128,12 @@ void Tensor::backward() {
     }
 
     if (!requires_grad_) { return; }
-
-    // Initialize gradient if needed
-    if (compute_size() == 1) {
-        auto& g = grad();
-        if (g.empty()) { g.resize(1, 0.0f); }
-        if (g[0] == 0.0f) { g[0] = 1.0f; }
-    } else if (!grad_) {
-         // Ensure gradient exists for non-scalars if requires_grad is true
-         grad(); // Call non-const version to allocate
-    } else {
-        // Optional warning for non-scalar zero gradients
-        // bool all_zero = std::all_of(grad_->begin(), grad_->end(), [](float g){ return g == 0.0f; });
-        // if(all_zero) { /* warning */ }
-    }
+    self_shared->one_grad();
 
     // Build topological order
     std::unordered_set<std::shared_ptr<Tensor>> visited;
     std::vector<std::shared_ptr<Tensor>> topo_order;
+
     std::function<void(std::shared_ptr<Tensor>)> build_topo =
         [&](std::shared_ptr<Tensor> node) {
         if (!node || visited.count(node)) { return; }
@@ -132,7 +149,13 @@ void Tensor::backward() {
     build_topo(self_shared);
 
     // Execute backward functions
-    for (const auto& node : topo_order) {
+    // for (const auto& node : topo_order) {
+    //     if (node && node->backward_fn_) {
+    //         node->backward_fn_();
+    //     }
+    // }
+    for (auto it = topo_order.rbegin(); it != topo_order.rend(); ++it) {
+        const auto& node = *it; // Get the shared_ptr from the reverse iterator
         if (node && node->backward_fn_) {
             node->backward_fn_();
         }
