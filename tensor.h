@@ -35,6 +35,7 @@ public:
      void set_requires_grad(bool req_grad);
      void zero_grad();
      void one_grad();
+    void set_data(const std::vector<float>& data);
 
     void add_dependency(std::shared_ptr<Tensor> dep);
     void set_backward_fn(std::function<void()> fn);
@@ -45,6 +46,9 @@ public:
     // Note: Operators are declared as member functions returning shared_ptr
     std::shared_ptr<Tensor> operator+(const Tensor& other) const;
     std::shared_ptr<Tensor> operator*(const Tensor& other) const; // Matrix multiplication
+    std::shared_ptr<Tensor> broadcast_add(const Tensor& other) const;
+    std::shared_ptr<Tensor> Tensor::log() const;
+    std::shared_ptr<Tensor> Tensor::neg() const;
 
     // Potentially add other operators here (subtraction, element-wise *, etc.)
 
