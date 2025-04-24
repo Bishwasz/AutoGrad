@@ -7,6 +7,8 @@
 #include <queue>        // For backward topological sort (if using queue)
 #include <unordered_set>// For backward topological sort visited set
 #include <vector>       // Needed again for implementation details
+#include <random>
+
 
 // --- Constructor Implementations --
 
@@ -35,6 +37,13 @@ Tensor::Tensor(const std::vector<int>& shape, bool requires_grad)
     }
     size_t size = compute_size();
     data_ = std::make_unique<std::vector<float>>(size, 0.0f);
+    std::random_device rd;  // random seed
+    std::mt19937 gen(rd()); // Mersenne Twister RNG
+
+    std::uniform_real_distribution<> dist(0.0, 1.0); 
+    for (size_t i = 0; i < size; ++i) {
+        (*data_)[i] = dist(gen); // Initialize data to zero
+    }
     if (requires_grad_) {
         grad_ = std::make_unique<std::vector<float>>(size, 0.0f);
     }
@@ -117,7 +126,13 @@ void Tensor::one_grad() {
         std::fill(grad_->begin(), grad_->end(), 1.0f);
     }
 }
-
+void Tensor::set_data(const std::vector<float>& data){
+    if (data.size() != compute_size()) {
+        throw std::invalid_argument("Data size does not match tensor shape");
+    } 
+ 
+    *data_ = data;
+}
 // --- Autograd Implementation ---
 void Tensor::backward() {
     std::shared_ptr<Tensor> self_shared;
@@ -289,6 +304,143 @@ std::shared_ptr<Tensor> Tensor::operator*(const Tensor& other) const {
                 }
             }
         };
+    }
+    return result;
+}
+std::shared_ptr<Tensor> Tensor::broadcast_add(const Tensor& other) const {
+    // Ensure both tensors are 2D
+    if (shape_.size() != 2 || other.shape_.size() != 2) {
+        throw std::runtime_error("Broadcast addition requires 2D tensors");
+    }
+
+    // Check shapes: [M, N] + [1, N]
+    size_t M = shape_[0];
+    size_t N = shape_[1];
+    if (other.shape_[0] != 1 || other.shape_[1] != N) {
+        throw std::runtime_error("Incompatible shapes for broadcast addition: [" +
+                                 std::to_string(M) + "," + std::to_string(N) + "] vs [" +
+                                 std::to_string(other.shape_[0]) + "," + std::to_string(other.shape_[1]) + "]");
+    }
+
+    // Create result tensor with same shape as input [M, N]
+    auto result = std::make_shared<Tensor>(shape_, requires_grad_ || other.requires_grad_);
+    auto& result_data = *(result->data_);
+    const auto& this_data = *data_;
+    const auto& other_data = *other.data_;
+
+    // Perform broadcast addition: add other[0, j] to each this[i, j]
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t j = 0; j < N; ++j) {
+            result_data[i * N + j] = this_data[i * N + j] + other_data[j];
+        }
+    }
+
+    // Set up gradients if required
+    if (result->requires_grad_) {
+        auto this_shared = std::const_pointer_cast<Tensor>(shared_from_this());
+        auto other_shared = std::const_pointer_cast<Tensor>(other.shared_from_this());
+        result->dependencies_.push_back(this_shared);
+        result->dependencies_.push_back(other_shared);
+
+        result->backward_fn_ = [result_wptr = std::weak_ptr<Tensor>(result),
+                               this_wptr = std::weak_ptr<Tensor>(this_shared),
+                               other_wptr = std::weak_ptr<Tensor>(other_shared)]() {
+            auto result_locked = result_wptr.lock();
+            auto this_tensor = this_wptr.lock();
+            auto other_tensor = other_wptr.lock();
+            if (!result_locked || !this_tensor || !other_tensor) return;
+
+            const auto& result_grad = result_locked->grad();
+            size_t M = this_tensor->shape()[0];
+            size_t N = this_tensor->shape()[1];
+
+            // Gradient for this_tensor: pass through gradients
+            if (this_tensor->requires_grad()) {
+                auto& this_grad = this_tensor->grad();
+                for (size_t i = 0; i < M; ++i) {
+                    for (size_t j = 0; j < N; ++j) {
+                        if (i * N + j < this_grad.size()) {
+                            this_grad[i * N + j] += result_grad[i * N + j];
+                        }
+                    }
+                }
+            }
+
+            // Gradient for other_tensor: sum gradients across rows
+            if (other_tensor->requires_grad()) {
+                auto& other_grad = other_tensor->grad();
+                for (size_t j = 0; j < N; ++j) {
+                    float grad_sum = 0.0f;
+                    for (size_t i = 0; i < M; ++i) {
+                        grad_sum += result_grad[i * N + j];
+                    }
+                    if (j < other_grad.size()) {
+                        other_grad[j] += grad_sum;
+                    }
+                }
+            }
+        };
+    }
+
+    return result;
+}
+
+std::shared_ptr<Tensor> Tensor::log() const {
+    // Compute log(data) element-wise
+    std::vector<float> log_data(data_.size());
+    for (size_t i = 0; i < data_.size(); ++i) {
+        if (data_[i] <= 0.0f) {
+            // Handle non-positive values for numerical stability
+            log_data[i] = std::log(1e-15f); // Small constant to avoid log(0) or log(negative)
+        } else {
+            log_data[i] = std::log(data_[i]);
+        }
+    }
+
+    // Create output tensor with same shape
+    auto result = std::make_shared<Tensor>(shape_, log_data, requires_grad_);
+
+    if (requires_grad_) {
+        // Set up backward function for autograd
+        // Gradient of log(x) is 1/x
+        auto self = std::make_shared<Tensor>(*this); // Copy of this tensor
+        result->backward_ = [self, result]() {
+            // Ensure gradients are initialized
+            if (self->grad_.empty()) {
+                self->grad_.resize(self->data_.size(), 0.0f);
+            }
+            // Compute gradient: dL/dx = dL/dy * dy/dx, where dy/dx = 1/x
+            const auto& result_grad = result->grad_;
+            const auto& self_data = self->data_;
+            for (size_t i = 0; i < self->grad_.size(); ++i) {
+                float dx = (self_data[i] > 0.0f) ? (1.0f / self_data[i]) : 0.0f; // dy/dx = 1/x
+                self->grad_[i] += result_grad[i] * dx; // Chain rule: dL/dx += dL/dy * dy/dx
+            }
+        };
+        // Optional: Store parents for graph tracking (if your autograd system requires it)
+        result->parents_ = {self};
+    }
+
+    return result;
+}
+std::shared_ptr<Tensor> Tensor::neg() const {
+    std::vector<float> neg_data(data_.size());
+    for (size_t i = 0; i < data_.size(); ++i) {
+        neg_data[i] = -data_[i];
+    }
+    auto result = std::make_shared<Tensor>(shape_, neg_data, requires_grad_);
+    if (requires_grad_) {
+        auto self = std::make_shared<Tensor>(*this);
+        result->backward_ = [self, result]() {
+            if (self->grad_.empty()) {
+                self->grad_.resize(self->data_.size(), 0.0f);
+            }
+            const auto& result_grad = result->grad_;
+            for (size_t i = 0; i < self->grad_.size(); ++i) {
+                self->grad_[i] += -result_grad[i]; // dL/dx = -dL/dy
+            }
+        };
+        result->parents_ = {self};
     }
     return result;
 }
