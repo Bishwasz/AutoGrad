@@ -102,6 +102,14 @@
     "unordered_map": "cpp",
     "variant": "cpp",
     "vector": "cpp",
-    "algorithm": "cpp"
+    "algorithm": "cpp",
+    "deque": "cpp",
+    "queue": "cpp",
+    "unordered_set": "cpp",
+    "fstream": "cpp",
+    "sstream": "cpp",
+    "*.tpp": "cpp",
+    "charconv": "cpp",
+    "iomanip": "cpp"
   }
 }
