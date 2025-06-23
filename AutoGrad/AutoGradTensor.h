@@ -14,11 +14,14 @@ class AutogradTensor : public BaseTensor<T> {
 
         // Getters
         std::vector<T>& grad() { return *grad_; }
-        const std::vector<T>& grad() const { return *grad_; }
+        // const std::vector<T>& grad() const { return *grad_; }
+        const std::vector<int>& shape() const { return this->shape_; }
         bool requires_grad() const;
 
         virtual T& at(const std::vector<int>& indices);
+
         virtual const T& at(const std::vector<int>& indices) const;
+        virtual const T& at_grad(const std::vector<int>& indices) const;
 
         AutogradTensor(AutogradTensor&& other) noexcept = default;
         AutogradTensor& operator=(AutogradTensor&& other) noexcept = default;
@@ -27,6 +30,7 @@ class AutogradTensor : public BaseTensor<T> {
         void set_requires_grad(bool req_grad);
         void zero_grad();
         void one_grad(); 
+        bool is_grad() const { return requires_grad_; }
 
         // Autograd
         void add_dependency(AutogradTensor<T> *dep);
@@ -41,16 +45,18 @@ class AutogradTensor : public BaseTensor<T> {
         AutogradTensor<T> relu();
         AutogradTensor<T> broadcast_add(AutogradTensor<T>& other) ;
         AutogradTensor<T> softmax();
-        AutogradTensor<T> cross_entropy_loss(AutogradTensor<T>& labels);
         
         // AutogradTensor<T> cross_entropy_loss(AutogradTensor<T>& other) ;
 
 
     protected:
         std::unique_ptr<std::vector<T>> grad_;
+        std::vector<int> grad_shape_;
         bool requires_grad_;
         std::vector<AutogradTensor<T>*> dependencies_;
         std::function<void()> backward_fn_;
 };
 #include "AutoGradTensor.tpp"
+#include "get_set.tpp"
+#include "init.tpp"
 #endif

@@ -61,7 +61,7 @@ MNISTDataset<T>::MNISTDataset(const std::string& csv_file) {
 template <typename T>
 AutogradTensor<T> MNISTDataset<T>::get_item(size_t index) {
     if (index >= num_images_) throw std::out_of_range("Index out of range");
-    return AutogradTensor<T>({1, static_cast<int>(rows_), static_cast<int>(cols_)}, images_[index], true);
+    return AutogradTensor<T>({ static_cast<int>(rows_)*static_cast<int>(cols_)}, images_[index], true);
 }
 
 template <typename T>
@@ -100,15 +100,13 @@ void DataLoader<T>::worker_thread() {
             batch_labels.push_back(dataset_->get_label(indices_[start_idx + i]));
         }
 
-        std::vector<int> data_shape = batch_data[0].shape();
-        data_shape[0] = static_cast<int>(actual_batch_size);
 
         std::vector<T> batched_data;
         for (const auto& tensor : batch_data) {
             batched_data.insert(batched_data.end(), tensor.data().begin(), tensor.data().end());
         }
-
-        AutogradTensor<T> data_tensor(data_shape, batched_data, true);
+        int column=batch_data[0].shape()[0];
+        AutogradTensor<T> data_tensor({static_cast<int>(batch_size_), static_cast<int>(column)}, batched_data, true);
 
         std::vector<int> label_shape = batch_labels[0].shape();
         label_shape[0] = static_cast<int>(actual_batch_size);
