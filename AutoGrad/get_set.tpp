@@ -89,7 +89,11 @@ void AutogradTensor<T>::one_grad() {
 
 template<typename T>
 void AutogradTensor<T>::add_dependency(AutogradTensor<T>* dep) {
-    dependencies_.push_back(dep);
+    if (dep != nullptr) {
+        dependencies_.push_back(dep);
+    } else {
+        std::cerr << "Warning: Attempted to add null dependency" << std::endl;
+    }
 }
 
 

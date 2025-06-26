@@ -127,7 +127,7 @@ BaseTensor<T> BaseTensor<T>::operator+(const BaseTensor<T>& other) const {
     if (shape_ != other.shape_) {
         throw std::runtime_error("Shape mismatch for addition");
     }
-    auto result = std::make_shared<BaseTensor<T>>(shape_);
+    auto result = std::make_shared<BaseTensor<T> >(shape_);
     size_t size = compute_size();
     for (size_t i = 0; i < size; ++i) {
         (*result->data_)[i] = (*data_)[i] + (*other.data_)[i];

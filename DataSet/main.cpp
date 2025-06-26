@@ -4,14 +4,29 @@
 #include <chrono> // Added for timing
 #include "./dataset.h"
 #include "../AutoGrad/AutoGradTensor.h"
+#include "../Loss/loss.hpp"
 void print_data(const AutogradTensor<float>& tensor) {
     std::cout << "Data: ";
-    for (size_t i = 0; i < tensor.data().size(); ++i) {
-        std::cout << tensor.data()[i] << " ";
-    }
+    if(tensor.shape().size()>1){
+        for (size_t i = 0; i < tensor.shape()[0]; ++i) {
+            std::cout << "[";
+            for (size_t j = 0; j < tensor.shape()[1]; ++j) {
+                std::cout << tensor.at({static_cast<int>(i), static_cast<int>(j)});
+                if (j < tensor.shape()[1] - 1) std::cout << ", ";
+            }
+            std::cout << "]";
+            if (i < tensor.shape()[0] - 1) std::cout << "\n ";
+        }
+    } else {
+        for (size_t i = 0; i < tensor.shape()[0]; ++i) {
+            std::cout << tensor.at({static_cast<int>(i)});
+            if (i < tensor.shape()[0] - 1) std::cout << ", ";
+
+        }
+
     std::cout << "\n";
     
-}
+}}
 void print_shape(const AutogradTensor<float>& tensor) {
     std::cout << "Shape: [";
     for (size_t i = 0; i < tensor.shape().size(); ++i) {
@@ -20,25 +35,30 @@ void print_shape(const AutogradTensor<float>& tensor) {
     }
     std::cout << "]\n";
 }
+AutogradTensor<float> one_hot_encode(AutogradTensor<float>& label, int num_classes, int batchSize) {
+    std::vector<float> data(num_classes*batchSize, 0.0f);
+    for(size_t i = 0; i < batchSize; ++i) {
+        int label_value = static_cast<int>(label.at({static_cast<int>(i)})); // Assuming label is a 2D tensor with shape [batchSize, 1]
+        if (label_value < 0 || label_value >= num_classes) {
+            throw std::out_of_range("Label value out of range for one-hot encoding");
+        }
+        data[i * num_classes + label_value] = 1.0f; // Set the corresponding class index to 1
+    }
+    return AutogradTensor<float>({batchSize, num_classes}, data, false);
+}
 int main() {
     try {
         auto dataset = std::make_shared<MNISTDataset<float>>("mnist_train.csv");
         std::cout << "Dataset loaded with " << dataset->size() << " samples\n";
         
-        size_t batch_size = 32;
+        size_t batch_size = 10;
         bool shuffle = false;
         size_t num_workers = 5;
         
         DataLoader<float> dataloader(dataset, batch_size, shuffle, num_workers);
 
-        // std::pair<AutogradTensor<float>, AutogradTensor<float>> batch;
-        // bool sucess=dataloader.next(batch);
-        // print_data(batch.second);
-        // print_shape(batch.first);
-        // std::cout << "True or nat: "  << sucess<< "\n";
+        AutogradTensor<float> weigh1({784,10},true);
 
-
-        
         int max_epochs = 1;
         for (int epoch = 0; epoch < max_epochs; ++epoch) {
             std::cout << "\n--- Epoch " << (epoch + 1) << " ---\n";
@@ -47,35 +67,23 @@ int main() {
             auto start_time = std::chrono::high_resolution_clock::now();
             
             int batch_count = 0;
-            while (true) {
-                std::pair<AutogradTensor<float>, AutogradTensor<float>> batch;
-                if (!dataloader.next(batch)) {
-                    break;
-                }
-                   // Test individual sample access
-                std::cout << "\n--- Individual Sample Access ---\n";
-                auto sample_image = dataset->get_item(0);
-                auto sample_label = dataset->get_label(0);
-                
-                std::cout << "Sample image shape: [";
-                for (size_t i = 0; i < sample_image.shape().size(); ++i) {
-                    std::cout << sample_image.shape()[i];
-                    if (i < sample_image.shape().size() - 1) std::cout << ", ";
-                }
-                std::cout << "]\n";
-                std::cout << "Sample label: " << static_cast<int>(sample_label.data()[0]) << "\n";
-                
-                std::cout << "First 10 pixel values: ";
-                const auto& pixel_data = sample_image.data();
-                for (size_t i = 0; i < std::min(10UL, pixel_data.size()); ++i) {
-                    std::cout << pixel_data[i] << " ";
-                }
-                std::cout << "\n";
-                batch_count++;
-                if(batch_count>3){
-                    break;  
-                }
+        while (true) {
+            std::pair<AutogradTensor<float>, AutogradTensor<float>> batch;
+            if (!dataloader.next(batch)) {
+                break;
             }
+
+            auto prediction=batch.first * weigh1;
+            auto labels = one_hot_encode(batch.second, 10, batch.first.shape()[0]);
+            auto loss = Loss<float>::cross_entropy_loss(prediction, labels);
+            print_data(loss);
+            loss.backward();
+            std::cout<<"No fualt yet 4 in main.cpp"<<std::endl;
+            batch_count++;
+            if (batch_count > 0) {
+                break;
+            }
+        }
                 
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -85,10 +93,7 @@ int main() {
                       << " in " << duration.count() << " milliseconds (" 
                       << duration.count() / 1000.0 << " seconds)\n";
             
-            dataloader.reset();
-        
-                
-                
+            dataloader.reset();             
             }
         
     } catch (const std::exception& e) {

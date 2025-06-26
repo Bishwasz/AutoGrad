@@ -19,15 +19,14 @@ template<typename T>
 AutogradTensor<T>::AutogradTensor(const std::vector<int>& shape, bool requires_grad)
     : BaseTensor<T>(shape), requires_grad_(requires_grad) {
 
-
     size_t size = this->BaseTensor<T>::compute_size();
     this->data_ = std::make_unique<std::vector<T>>(size);
+
     std::random_device rd;
     std::mt19937 gen(rd());
 
     if constexpr (std::is_integral<T>::value) {
-        std::uniform_int_distribution<T> dist(0, 100);  // Adjust range as needed
-        this->grad_ = std::make_unique<std::vector<int>>(this->BaseTensor<T>::compute_size(), 0);
+        std::uniform_int_distribution<T> dist(0, 100);
         for (size_t i = 0; i < size; ++i) {
             (*this->data_)[i] = dist(gen);
         }
@@ -39,4 +38,10 @@ AutogradTensor<T>::AutogradTensor(const std::vector<int>& shape, bool requires_g
     } else {
         throw std::runtime_error("Random initialization not supported for this type");
     }
+
+    // ✅ ALWAYS initialize grad_ if required
+    if (requires_grad_) {
+        this->grad_ = std::make_unique<std::vector<T>>(size, T(0));
+    }
 }
+

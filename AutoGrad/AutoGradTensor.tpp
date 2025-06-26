@@ -30,6 +30,9 @@ void AutogradTensor<T>::backward() {
 
     for (auto it = topo_order.rbegin(); it != topo_order.rend(); ++it) {
         const auto* node = *it; // Use pointer type
+        if (!node) std::cerr << "Warning: Null node in backward pass" << std::endl;
+        if(!node->backward_fn_) std::cerr << "Warning: No backward function set for node" << std::endl;
+
         if (node && node->backward_fn_) {
             node->backward_fn_();
         }
@@ -151,6 +154,8 @@ AutogradTensor<T> AutogradTensor<T>::operator*(AutogradTensor<T>& other) {
 
         result.set_backward_fn([this, other_ptr = &other, M, K, N, &result]() {
             const auto& result_grad = result.grad();
+            // std::cout<<"No fault yet 3 " << std::endl;
+
 
             if (this->requires_grad()) {
                 auto& this_grad = this->grad();
@@ -167,6 +172,7 @@ AutogradTensor<T> AutogradTensor<T>::operator*(AutogradTensor<T>& other) {
 
             if (other_ptr->requires_grad()) {
                 auto& other_grad = other_ptr->grad();
+                // std::cout<<"No fault yet 4 " << std::endl;
                 for (int k = 0; k < K; ++k) {
                     for (int j = 0; j < N; ++j) {
                         T grad_val = 0;

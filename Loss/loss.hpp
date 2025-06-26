@@ -26,7 +26,7 @@ AutogradTensor<T> Loss<T>::cross_entropy_loss( AutogradTensor<T>& predictions, c
 
     for (size_t n = 0; n < batch_size; ++n) {
         // Compute softmax for sample n
-        T max_logit = predictions.at({n,1}); // For numerical stability
+        T max_logit = predictions.at({static_cast<int>(n),1}); // For numerical stability
         for (size_t i = 1; i < num_classes; ++i) {
             max_logit = std::max(max_logit, predictions.at({static_cast<int>(n) ,  static_cast<int>(i)}));
         }
@@ -46,6 +46,7 @@ AutogradTensor<T> Loss<T>::cross_entropy_loss( AutogradTensor<T>& predictions, c
             }
         }
     }
+    
 
     // Average loss over batch
     T avg_loss = loss_sum / static_cast<T>(batch_size);
@@ -59,7 +60,7 @@ AutogradTensor<T> Loss<T>::cross_entropy_loss( AutogradTensor<T>& predictions, c
 
         // Add dependencies
         result.add_dependency(const_cast<AutogradTensor<T>*>(&predictions));
-        result.add_dependency(const_cast<AutogradTensor<T>*>(&labels));
+        // result.add_dependency(const_cast<AutogradTensor<T>*>(&labels));
 
         // Set backward function
         result.set_backward_fn([&result,&predictions, &labels, softmax_probs, batch_size, num_classes]() {
@@ -67,14 +68,19 @@ AutogradTensor<T> Loss<T>::cross_entropy_loss( AutogradTensor<T>& predictions, c
             T grad_scale = result_grad[0] / static_cast<T>(batch_size); // Scale by 1/N
 
             // Gradient w.r.t. predictions: (softmax - labels) / batch_size
+            // std::cout << "No fault yet 1 " << std::endl;
             if (predictions.is_grad()) {
-                auto& pred_grad = predictions.grad();
+                auto &pred_grad = predictions.grad();
+                
+                // std::cout<<pred_grad.size() << std::endl;
+                // std::cout<<pred_grad.data()->size() << std::endl;
                 for (size_t n = 0; n < batch_size; ++n) {
                     for (size_t i = 0; i < num_classes; ++i) {
                         size_t idx = n * num_classes + i;
                         pred_grad[idx] += grad_scale * (softmax_probs[idx] - labels.at({static_cast<int>(n), static_cast<int>(i)}));
                     }
                 }
+                // std::cout << "No fault yet 2 " << std::endl;
             }
 
 
