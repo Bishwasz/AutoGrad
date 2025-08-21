@@ -13,8 +13,8 @@ MNISTDataset<T>::MNISTDataset(const std::string& csv_file) {
     }
 
     std::string line;
-    std::getline(file, line); // Skip header
-    size_t line_number = 2;
+    // std::getline(file, line); // Skip header
+    size_t line_number = 0;
 
     while (std::getline(file, line)) {
         std::stringstream ss(line);
@@ -40,7 +40,7 @@ MNISTDataset<T>::MNISTDataset(const std::string& csv_file) {
                 throw std::runtime_error("Insufficient pixels in CSV at line " + std::to_string(line_number));
             }
             try {
-                pixels.push_back(static_cast<T>(std::stof(value)) / static_cast<T>(255.0));
+                pixels.push_back(static_cast<T>(std::stof(value) / 255.0f));
             } catch (...) {
                 throw std::runtime_error("Invalid pixel value at line " + std::to_string(line_number));
             }
@@ -75,7 +75,6 @@ size_t MNISTDataset<T>::size() const {
     return num_images_;
 }
 
-// ==== DataLoader Implementation ====
 
 template <typename T>
 void DataLoader<T>::worker_thread() {
@@ -106,7 +105,7 @@ void DataLoader<T>::worker_thread() {
             batched_data.insert(batched_data.end(), tensor.data().begin(), tensor.data().end());
         }
         int column=batch_data[0].shape()[0];
-        AutogradTensor<T> data_tensor({static_cast<int>(batch_size_), static_cast<int>(column)}, batched_data, true);
+        AutogradTensor<T> data_tensor({static_cast<int>(actual_batch_size), static_cast<int>(column)}, batched_data, true);
 
         std::vector<int> label_shape = batch_labels[0].shape();
         label_shape[0] = static_cast<int>(actual_batch_size);
@@ -116,7 +115,7 @@ void DataLoader<T>::worker_thread() {
             batched_labels.insert(batched_labels.end(), tensor.data().begin(), tensor.data().end());
         }
 
-        AutogradTensor<T> label_tensor(label_shape, batched_labels, true);
+        AutogradTensor<T> label_tensor({static_cast<int>(actual_batch_size)}, batched_labels, true);
 
         {
             std::unique_lock<std::mutex> lock(mutex_);

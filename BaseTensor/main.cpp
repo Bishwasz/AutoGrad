@@ -1,6 +1,6 @@
 #include "BaseTensor.h"
 #include <iostream>
-#include <chrono>  // Add this header for timing
+#include <chrono>  // For timing
 
 template <typename T>
 void print_tensor(const BaseTensor<T>& tensor) {
@@ -17,25 +17,22 @@ void print_tensor(const BaseTensor<T>& tensor) {
 
 int main() {
     try {
-        std::vector<int> shape = {2, 2};
+        std::vector<int> shape = {500, 500};
 
-        BaseTensor<double> tensor1(shape, std::vector<double>{1,2,3,4}); // Initialize with ones
-        // BaseTensor<int> tensor2(std::vector<int>{1, 2},std::vector<int>{5,5}); // Initialize with zeros
+        BaseTensor<double> tensor1(shape);
+        BaseTensor<double> tensor2(shape);
 
         // Start timing
         auto start = std::chrono::high_resolution_clock::now();
-
-        auto result = tensor1.neg(); // Assuming tensor2 is initialized to zeros
+        
+        auto tensor4 = tensor1 * tensor2; // Matrix multiplication
 
         // End timing
         auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration = end - start;
 
-        // Compute duration
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        std::cout << "Matrix multiplication took " << duration.count() << " microseconds\n";
+        std::cout << "Matrix multiplication took " << duration.count() << " ms.\n";
 
-        print_tensor(tensor1);
-        print_tensor(*result);
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

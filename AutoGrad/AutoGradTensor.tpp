@@ -1,22 +1,45 @@
-
 #include <random>
+#include <iostream>
 #include <functional>
 #include <memory>
 #include <unordered_set>
-#include <algorithm> // for std::max_element
+#include <algorithm>
+#include <cstdio>
+#include "../BaseTensor/Mul.h" // Assuming this contains openBlasMultiply
+
+// Forward declaration if AutogradTensor is in its own header
+template<typename T>
+class AutogradTensor;
+
+// CORRECTED: The backward function now accepts a pointer to its owner tensor.
+// This is the core fix for the memory safety issue.
+template<typename T>
+using BackwardFn = std::function<void(AutogradTensor<T>*)>;
+
+
+// Helper function for transposing a matrix
+template<typename T>
+void transpose(const std::vector<T>& input, std::vector<T>& output, size_t rows, size_t cols) {
+    output.resize(rows * cols);
+    for (size_t i = 0; i < rows; ++i) {
+        for (size_t j = 0; j < cols; ++j) {
+            output[j * rows + i] = input[i * cols + j];
+        }
+    }
+}
 
 
 template<typename T>
 void AutogradTensor<T>::backward() {
     if (!requires_grad_) return;
 
-    this->one_grad();
+    this->grad_.one_data(); // Initialize gradient of the final tensor to ones
 
-    std::unordered_set<AutogradTensor<T>*, std::hash<AutogradTensor<T>*>, std::equal_to<AutogradTensor<T>*>> visited;
+    std::unordered_set<AutogradTensor<T>*> visited;
     std::vector<AutogradTensor<T>*> topo_order;
 
-    // Fix: Use pointer type for node
-    std::function<void(AutogradTensor<T>*)> build_topo = [&](AutogradTensor<T>* node) {
+    std::function<void(AutogradTensor<T>*)> build_topo = 
+        [&](AutogradTensor<T>* node) {
         if (!node || visited.count(node)) return;
         visited.insert(node);
 
@@ -29,26 +52,24 @@ void AutogradTensor<T>::backward() {
     build_topo(this);
 
     for (auto it = topo_order.rbegin(); it != topo_order.rend(); ++it) {
-        const auto* node = *it; // Use pointer type
-        if (!node) std::cerr << "Warning: Null node in backward pass" << std::endl;
-        if(!node->backward_fn_) std::cerr << "Warning: No backward function set for node" << std::endl;
-
+        auto* node = *it;
         if (node && node->backward_fn_) {
-            node->backward_fn_();
+            // CORRECTED: Pass the node itself to its backward function.
+            node->backward_fn_(node);
         }
     }
 }
 
-
-
+// CORRECTED: Takes `other` by const reference.
 template <typename T>
-AutogradTensor<T> AutogradTensor<T>::operator+(AutogradTensor<T>& other) {
+AutogradTensor<T> AutogradTensor<T>::operator+(const AutogradTensor<T>& other) {
     if (this->shape_ != other.shape()) {
         throw std::runtime_error("Shape mismatch for addition");
     }
 
-    std::vector<T> result_data(this->compute_size());
-    for (size_t i = 0; i <this->compute_size(); ++i) {
+    size_t size = this->compute_size();
+    std::vector<T> result_data(size);
+    for (size_t i = 0; i < size; ++i) {
         result_data[i] = (*this->data_)[i] + other.data()[i];
     }
 
@@ -57,37 +78,40 @@ AutogradTensor<T> AutogradTensor<T>::operator+(AutogradTensor<T>& other) {
 
     if (result_requires_grad) {
         result.add_dependency(this);
-        result.add_dependency(&other);
+        // Note: The lifetime of `other` must exceed the call to backward().
+        result.add_dependency(const_cast<AutogradTensor<T>*>(&other));
 
-        result.set_backward_fn([this, &other, &result]() {
-            const auto& result_grad = result.grad();
+        // CORRECTED: Lambda accepts a `self` pointer, avoiding dangling references.
+        result.set_backward_fn([this, &other](AutogradTensor<T>* self) {
+            const auto& grad_data = self->grad().data();
 
             if (this->requires_grad()) {
-                auto& this_grad = this->grad();
-                for (size_t i = 0; i < result.compute_size(); ++i) {
-                    this_grad[i] += result_grad[i];
+                auto& this_grad = this->grad().data();
+                for (size_t i = 0; i < grad_data.size(); ++i) {
+                    this_grad[i] += grad_data[i];
                 }
             }
 
             if (other.requires_grad()) {
-                auto& other_grad = other.grad();
-                for (size_t i = 0; i < result.compute_size(); ++i) {
-                    other_grad[i] += result_grad[i];
+                auto& other_grad = const_cast<AutogradTensor<T>&>(other).grad().data();
+                for (size_t i = 0; i < grad_data.size(); ++i) {
+                    other_grad[i] += grad_data[i];
                 }
             }
         });
     }
-
     return result;
 }
+
+// CORRECTED: Takes `other` by const reference.
 template <typename T>
-AutogradTensor<T> AutogradTensor<T>::operator-(AutogradTensor<T>& other) {
+AutogradTensor<T> AutogradTensor<T>::operator-(const AutogradTensor<T>& other) {
     if (this->shape_ != other.shape()) {
-        throw std::runtime_error("Shape mismatch for addition");
+        throw std::runtime_error("Shape mismatch for subtraction");
     }
 
     std::vector<T> result_data(this->compute_size());
-    for (size_t i = 0; i <this->compute_size(); ++i) {
+    for (size_t i = 0; i < this->compute_size(); ++i) {
         result_data[i] = (*this->data_)[i] - other.data()[i];
     }
 
@@ -96,107 +120,94 @@ AutogradTensor<T> AutogradTensor<T>::operator-(AutogradTensor<T>& other) {
 
     if (result_requires_grad) {
         result.add_dependency(this);
-        result.add_dependency(&other);
+        result.add_dependency(const_cast<AutogradTensor<T>*>(&other));
 
-        result.set_backward_fn([this, &other, &result]() {
-            const auto& result_grad = result.grad();
+        // CORRECTED: Lambda accepts a `self` pointer.
+        result.set_backward_fn([this, &other](AutogradTensor<T>* self) {
+            const auto& result_grad = self->grad().data();
 
             if (this->requires_grad()) {
-                auto& this_grad = this->grad();
-                for (size_t i = 0; i < result.compute_size(); ++i) {
+                auto& this_grad = this->grad().data();
+                for (size_t i = 0; i < result_grad.size(); ++i) {
                     this_grad[i] += result_grad[i];
                 }
             }
 
             if (other.requires_grad()) {
-                auto& other_grad = other.grad();
-                for (size_t i = 0; i < result.compute_size(); ++i) {
+                auto& other_grad = const_cast<AutogradTensor<T>&>(other).grad().data();
+                for (size_t i = 0; i < result_grad.size(); ++i) {
                     other_grad[i] -= result_grad[i];
                 }
             }
         });
     }
-
     return result;
 }
 
-
-
+// CORRECTED: Takes `other` by const reference.
 template <typename T>
-AutogradTensor<T> AutogradTensor<T>::operator*(AutogradTensor<T>& other) {
+AutogradTensor<T> AutogradTensor<T>::operator*(const AutogradTensor<T>& other) {
     if (this->shape_[1] != other.shape()[0]) {
-        throw std::runtime_error("Shape mismatch for multiplication: incompatible inner dimensions.");
+        throw std::runtime_error("Shape mismatch for multiplication.");
     }
 
-    int M = this->shape_[0];
-    int K = this->shape_[1];
-    int N = other.shape()[1];  // ✅ Corrected
+    size_t M = this->shape_[0];
+    size_t K = this->shape_[1];
+    size_t N = other.shape()[1];
+    std::vector<T> result_data(M * N);
 
-    std::vector<T> result_data(M * N, T(0));
+    openBlasMultiply(this->data(), other.data(), result_data, M, K, N);
 
-    // Matrix multiplication
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            T sum = 0;
-            for (int k = 0; k < K; ++k) {
-                sum += (*this->data_)[i * K + k] * other.data()[k * N + j];
-            }
-            result_data[i * N + j] = sum;
-        }
-    }
+    bool result_requires_grad = this->requires_grad_ || other.requires_grad_;
+    AutogradTensor<T> result({static_cast<int>(M), static_cast<int>(N)}, result_data, result_requires_grad);
 
-    // Correct output shape
-    AutogradTensor<T> result({M, N}, result_data, requires_grad_ || other.requires_grad_);
-
-    if (result.requires_grad_) {
+    if (result_requires_grad) {
         result.add_dependency(this);
-        result.add_dependency(&other);
+        result.add_dependency(const_cast<AutogradTensor<T>*>(&other));
 
-        result.set_backward_fn([this, other_ptr = &other, M, K, N, &result]() {
-            const auto& result_grad = result.grad();
-            // std::cout<<"No fault yet 3 " << std::endl;
+        // IMPROVED: Capture data by value for safety, as only original values are needed.
+        auto this_data_copy = *this->data_;
+        auto other_data_copy = *other.data_;
 
+        result.set_backward_fn([this, &other, this_data_copy, other_data_copy, M, K, N]
+                               (AutogradTensor<T>* self) {
+            const auto& result_grad = self->grad().data();
 
             if (this->requires_grad()) {
-                auto& this_grad = this->grad();
-                for (int i = 0; i < M; ++i) {
-                    for (int k = 0; k < K; ++k) {
-                        T grad_val = 0;
-                        for (int j = 0; j < N; ++j) {
-                            grad_val += result_grad[i * N + j] * other_ptr->data()[k * N + j];
-                        }
-                        this_grad[i * K + k] += grad_val;
-                    }
+                // Grad for `this` is result_grad * other^T
+                std::vector<T> other_T;
+                transpose(other_data_copy, other_T, K, N);
+                
+                std::vector<T> this_grad_update(M * K);
+                openBlasMultiply(result_grad, other_T, this_grad_update, M, N, K);
+                
+                auto& this_grad = this->grad().data();
+                for(size_t i = 0; i < this_grad.size(); ++i) {
+                    this_grad[i] += this_grad_update[i];
                 }
             }
 
-            if (other_ptr->requires_grad()) {
-                auto& other_grad = other_ptr->grad();
-                // std::cout<<"No fault yet 4 " << std::endl;
-                for (int k = 0; k < K; ++k) {
-                    for (int j = 0; j < N; ++j) {
-                        T grad_val = 0;
-                        for (int i = 0; i < M; ++i) {
-                            grad_val += (*this->data_)[i * K + k] * result_grad[i * N + j];
-                        }
-                        other_grad[k * N + j] += grad_val;
-                    }
+            if (other.requires_grad()) {
+                // Grad for `other` is this^T * result_grad
+                std::vector<T> this_T;
+                transpose(this_data_copy, this_T, M, K);
+
+                std::vector<T> other_grad_update(K * N);
+                openBlasMultiply(this_T, result_grad, other_grad_update, K, M, N);
+
+                auto& other_grad = const_cast<AutogradTensor<T>&>(other).grad().data();
+                for(size_t i = 0; i < other_grad.size(); ++i) {
+                    other_grad[i] += other_grad_update[i];
                 }
             }
         });
     }
-
     return result;
 }
 
-
-
-
-
-
 template <typename T>
-AutogradTensor<T> AutogradTensor<T>::log()  {
-    std::vector<T> result_data(this->BaseTensor<T>::compute_size());
+AutogradTensor<T> AutogradTensor<T>::log() {
+    std::vector<T> result_data(this->compute_size());
     for (size_t i = 0; i < result_data.size(); ++i) {
         if ((*this->data_)[i] <= T{0}) throw std::runtime_error("Log of non-positive value");
         result_data[i] = std::log((*this->data_)[i]);
@@ -204,211 +215,91 @@ AutogradTensor<T> AutogradTensor<T>::log()  {
     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
     if (requires_grad_) {
         result.add_dependency(this);
-        result.set_backward_fn([this,&result]() {
-            const auto& result_grad = result.grad();
-            auto& this_grad = this->grad(); // Non-const grad()
-            for (size_t i = 0; i < this->BaseTensor<T>::compute_size(); ++i) {
+        // CORRECTED: Lambda accepts a `self` pointer.
+        result.set_backward_fn([this](AutogradTensor<T>* self) {
+            const auto& result_grad = self->grad();
+            auto& this_grad = this->grad();
+            for (size_t i = 0; i < this->compute_size(); ++i) {
                 this_grad[i] += result_grad[i] / (*this->data_)[i];
             }
         });
     }
     return result;
-
-
 }
 
+// CORRECTED: Takes `other` by const reference.
 template <typename T>
-AutogradTensor<T> AutogradTensor<T>::broadcast_add(AutogradTensor<T>& other) {
-    if (this->shape_[1] != other.shape()[0]) {
+AutogradTensor<T> AutogradTensor<T>::broadcast_add(const AutogradTensor<T>& other) {
+    if (this->shape_.size() != 2 || other.shape().size() != 1 ||
+        this->shape_[1] != other.shape()[0]) {
         throw std::runtime_error("Shape mismatch for broadcast addition");
     }
+
     const size_t M = this->shape_[0];
     const size_t N = this->shape_[1];
-
     std::vector<T> result_data(M * N);
-
     for (size_t r = 0; r < M; ++r) {
         for (size_t c = 0; c < N; ++c) {
             result_data[r * N + c] = (*this->data_)[r * N + c] + other.data()[c];
         }
     }
 
-    AutogradTensor<T> result(this->shape_, result_data, requires_grad_ || other.requires_grad_);
-    if (result.requires_grad_) {
+    bool result_requires_grad = this->requires_grad_ || other.requires_grad_;
+    AutogradTensor<T> result(this->shape_, result_data, result_requires_grad);
+
+    if (result_requires_grad) {
         result.add_dependency(this);
-        result.add_dependency(&other);
+        result.add_dependency(const_cast<AutogradTensor<T>*>(&other));
 
-        result.set_backward_fn([this, &other, &result]() {
-            const auto& result_grad = result.grad();
+        // CORRECTED: Lambda accepts a `self` pointer.
+        result.set_backward_fn([this, &other, M, N](AutogradTensor<T>* self) {
+            const auto& grad_out = self->grad().data();
 
-            if (this->requires_grad_) {
-                auto& this_grad = this->grad();
-                for (int r = 0; r < this->shape_[0]; ++r) {
-                    for (int c = 0; c < this->shape_[1]; ++c) {
-                        this_grad[r * this->shape_[1] + c] += result_grad[r * this->shape_[1] + c];
-                    }
+            if (this->requires_grad()) {
+                auto& this_grad = this->grad().data();
+                for (size_t i = 0; i < M * N; ++i) {
+                    this_grad[i] += grad_out[i];
                 }
             }
-
-            if (other.requires_grad_) {
-                auto& other_grad = other.grad();
-                for (int c = 0; c < other.shape()[0]; ++c) {
-                    T grad_sum = 0;
-                    for (int r = 0; r < this->shape_[0]; ++r) {
-                        grad_sum += result_grad[r * this->shape_[1] + c];
+            if (other.requires_grad()) {
+                auto& other_grad = const_cast<AutogradTensor<T>&>(other).grad().data();
+                for (size_t c = 0; c < N; ++c) {
+                    T grad_sum = T{0};
+                    for (size_t r = 0; r < M; ++r) {
+                        grad_sum += grad_out[r * N + c];
                     }
                     other_grad[c] += grad_sum;
                 }
             }
         });
     }
-
-
     return result;
-
 }
 
 template <typename T>
 AutogradTensor<T> AutogradTensor<T>::relu() {
-    std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-    for (size_t i = 0; i < result_data.size(); ++i) {
+    size_t size = this->compute_size();
+    std::vector<T> result_data(size);
+    for (size_t i = 0; i < size; ++i) {
         result_data[i] = std::max((*this->data_)[i], T{0});
     }
+
     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
+
     if (requires_grad_) {
         result.add_dependency(this);
-        result.set_backward_fn([this,&result]() {
-            const auto& result_grad = result.grad();
-            auto& this_grad = this->grad(); // Non-const grad()
-            for (size_t i = 0; i < this->BaseTensor<T>::compute_size(); ++i) {
-                this_grad[i] += (*this->data_)[i] > T{0} ? result_grad[i] : T{0};
+
+        // CORRECTED: Lambda accepts a `self` pointer.
+        result.set_backward_fn([this, size](AutogradTensor<T>* self) {
+            const auto& grad_out = self->grad().data();
+            auto& grad_in = this->grad().data();
+
+            for (size_t i = 0; i < size; ++i) {
+                if ((*this->data_)[i] > T{0}) {
+                    grad_in[i] += grad_out[i];
+                }
             }
         });
     }
     return result;
 }
-
-// template <typename T>
-// AutogradTensor<T> AutogradTensor<T>::log() const {
-//     std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-//     for (size_t i = 0; i < result_data.size(); ++i) {
-//         if ((*this->data_)[i] <= T{0}) throw std::runtime_error("Log of non-positive value");
-//         result_data[i] = std::log((*this->data_)[i]);
-//     }
-//     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
-//     if (requires_grad_) {
-//         result.add_dependency(const_cast<AutogradTensor<T>*>(this));
-//         result.set_backward_fn([this_ptr = const_cast<AutogradTensor<T>*>(this),
-//                                result_ptr = std::make_shared<AutogradTensor<T>>(result)]() {
-//             const auto& result_grad = result_ptr->grad();
-//             auto& this_grad = this_ptr->grad(); // Non-const grad()
-//             for (size_t i = 0; i < this_ptr->BaseTensor<T>::compute_size(); ++i) {
-//                 this_grad[i] += result_grad[i] / (*this_ptr->data_)[i];
-//             }
-//         });
-//     }
-//     return result;
-// }
-
-// template <typename T>
-// AutogradTensor<T> AutogradTensor<T>::neg() const {
-//     std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-//     for (size_t i = 0; i < result_data.size(); ++i) {
-//         result_data[i] = -(*this->data_)[i];
-//     }
-//     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
-//     if (requires_grad_) {
-//         result.add_dependency(const_cast<AutogradTensor<T>*>(this));
-//         result.set_backward_fn([this_ptr = const_cast<AutogradTensor<T>*>(this),
-//                                result_ptr = std::make_shared<AutogradTensor<T>>(result)]() {
-//             const auto& result_grad = result_ptr->grad();
-//             auto& this_grad = this_ptr->grad();
-//             for (size_t i = 0; i < this_ptr->BaseTensor<T>::compute_size(); ++i) {
-//                 this_grad[i] += -result_grad[i];
-//             }
-//         });
-//     }
-//     return result;
-// }
-
-
-
-// template <typename T>
-// AutogradTensor<T> AutogradTensor<T>::sigmoid() const {
-//     std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-//     for (size_t i = 0; i < result_data.size(); ++i) {
-//         result_data[i] = T{1} / (T{1} + std::exp(-(*this->data_)[i]));
-//     }
-//     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
-//     if (requires_grad_) {
-//         result.add_dependency(const_cast<AutogradTensor<T>*>(this));
-//         result.set_backward_fn([this_ptr = const_cast<AutogradTensor<T>*>(this),
-//                                result_ptr = std::make_shared<AutogradTensor<T>>(result)]() {
-//             const auto& result_grad = result_ptr->grad();
-//             auto& this_grad = this_ptr->grad();
-//             for (size_t i = 0; i < this_ptr->BaseTensor<T>::compute_size(); ++i) {
-//                 T sigmoid_val = T{1} / (T{1} + std::exp(-(*this_ptr->data_)[i]));
-//                 this_grad[i] += result_grad[i] * sigmoid_val * (T{1} - sigmoid_val);
-//             }
-//         });
-//     }
-//     return result;
-// }
-
-// template <typename T>
-// AutogradTensor<T> AutogradTensor<T>::relu() const {
-//     std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-//     for (size_t i = 0; i < result_data.size(); ++i) {
-//         result_data[i] = (*this->data_)[i] > T{0} ? (*this->data_)[i] : T{0};
-//     }
-//     AutogradTensor<T> result(this->shape_, result_data, requires_grad_);
-//     if (requires_grad_) {
-//         result.add_dependency(const_cast<AutogradTensor<T>*>(this));
-//         result.set_backward_fn([this_ptr = const_cast<AutogradTensor<T>*>(this),
-//                                result_ptr = std::make_shared<AutogradTensor<T>>(result)]() {
-//             const auto& result_grad = result_ptr->grad();
-//             auto& this_grad = this_ptr->grad();
-//             for (size_t i = 0; i < this_ptr->BaseTensor<T>::compute_size(); ++i) {
-//                 this_grad[i] += (*this_ptr->data_)[i] > T{0} ? result_grad[i] : T{0};
-//             }
-//         });
-//     }
-//     return result;
-// }
-
-// // template <typename T>
-// // AutogradTensor<T> AutogradTensor<T>::softmax() const {
-// //     std::vector<T> exp_data(this->BaseTensor<T>::compute_size());
-// //     T max_val = *std::max_element(this->data_->begin(), this->data_->end());
-// //     for (size_t i = 0; i < this->BaseTensor<T>::compute_size(); ++i) {
-// //         exp_data[i] = std::exp((*this->data_)[i] - max_val);
-// //     }
-// //     T sum_exp = std::accumulate(exp_data.begin(), exp_data.end(), static_cast<T>(0));
-// //     std::vector<T> result_data(this->BaseTensor<T>::compute_size());
-// //     for (size_t i = 0; i < this->BaseTensor<T>::compute_size(); ++i) {
-// //         result_data[i] = exp_data[i] / sum_exp;
-// //     }
-// //     AutogradTensor<T> result(this->shape_, result_data, this->requires_grad_);
-// //     if (result.requires_grad_) {
-// //         result.add_dependency(const_cast<AutogradTensor<T>*>(this));
-// //         result.set_backward_fn([this_ptr = const_cast<AutogradTensor<T>*>(this),
-// //                                result_ptr = &result, // Capture the result tensor
-// //                                result_data = result.data_]() {
-// //             const auto& result_grad = result_ptr->grad();
-// //             auto& this_grad = this_ptr->grad();
-// //             const auto& softmax_output = *result_data;
-// //             for (size_t i = 0; i < this_ptr->compute_size(); ++i) {
-// //                 T grad_val = 0;
-// //                 for (size_t j = 0; j < this_ptr->compute_size(); ++j) {
-// //                     T delta = (i == j) ? 1.0 : 0.0;
-// //                     grad_val += result_grad[j] * softmax_output[i] * (delta - softmax_output[j]);
-// //                 }
-// //                 this_grad[i] += grad_val;
-// //             }
-// //         });
-// //     }
-// //     return result;
-// // }
-
-template class AutogradTensor<double>;
-template class AutogradTensor<float>;

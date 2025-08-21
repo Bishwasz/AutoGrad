@@ -3,28 +3,31 @@
 
 #include "BaseTensor.h"
 #include <random>
+#include "Mul.cpp"
+#include <cblas.h>
+
 template <typename T>
 BaseTensor<T>::BaseTensor(const std::vector<int>& shape, const std::vector<T>& data)
     : shape_(shape){
-    size_t size = compute_size();
-    if (data.size() != size) {
-        std::string shape_str;
-        for (size_t i = 0; i < shape_.size(); ++i) {
-            shape_str += std::to_string(shape_[i]) + (i == shape_.size() - 1 ? "" : ", ");
-        }
-        throw std::runtime_error("Data size (" + std::to_string(data.size()) + ") does not match shape [" + shape_str + "] which requires size " + std::to_string(size));
-    }
+    // size_t size = compute_size();
+    // if (data.size() != size) {
+    //     std::string shape_str;
+    //     for (size_t i = 0; i < shape_.size(); ++i) {
+    //         shape_str += std::to_string(shape_[i]) + (i == shape_.size()  ? "" : ", ");
+    //     }
+    //     throw std::runtime_error("Data size (" + std::to_string(data.size()) + ") does muji  not match shape [" + shape_str + "] which requires size " + std::to_string(size));
+    // }
     data_ = std::make_unique<std::vector<T>>(data);
 
 }
-template <typename T>
-BaseTensor<T>& BaseTensor<T>::operator=(const BaseTensor<T>& other) {
-    if (this != &other) {
-        shape_ = other.shape_;
-        data_ = std::make_unique<std::vector<T>>(*other.data_);
-    }
-    return *this;
-}
+// template <typename T>
+// BaseTensor<T>& BaseTensor<T>::operator=(const BaseTensor<T>& other) {
+//     if (this != &other) {
+//         shape_ = other.shape_;
+//         data_ = std::make_unique<std::vector<T>>(*other.data_);
+//     }
+//     return *this;
+// }
 
 template <typename T>
 BaseTensor<T>::BaseTensor(const std::vector<int>& shape)
@@ -127,15 +130,23 @@ BaseTensor<T> BaseTensor<T>::operator+(const BaseTensor<T>& other) const {
     if (shape_ != other.shape_) {
         throw std::runtime_error("Shape mismatch for addition");
     }
-    auto result = std::make_shared<BaseTensor<T> >(shape_);
+    auto result =BaseTensor<T>(shape_);
     size_t size = compute_size();
     for (size_t i = 0; i < size; ++i) {
-        (*result->data_)[i] = (*data_)[i] + (*other.data_)[i];
+        (*result.data_)[i] = (*data_)[i] + (*other.data_)[i];
     }
     return result;
 }
 
 // naive implementation of matrix multiplication
+
+void print_tensor(const std::vector<float>& tensor) {
+    std::cout << "Tensor data: ";
+    for (const auto& val : tensor) {
+        std::cout << val << " ";
+    }
+    std::cout << std::endl;
+}
 template <typename T>
 BaseTensor<T> BaseTensor<T>::operator*(const BaseTensor<T>& other) const {
     if (shape_.size() != 2 || other.shape_.size() != 2) {
@@ -149,17 +160,12 @@ BaseTensor<T> BaseTensor<T>::operator*(const BaseTensor<T>& other) const {
     }
 
     std::vector<int> result_shape = {static_cast<int>(M), static_cast<int>(N)};
-    auto result = std::make_shared<BaseTensor<T>>(result_shape);
-    for (size_t i = 0; i < M; ++i) {
-        for (size_t j = 0; j < N; ++j) {
-            (*result->data_)[i * N + j] = 0;
-            T sum = 0;
-            for (size_t k = 0; k < K; ++k) {
-                sum += (*data_)[i * K + k] * (*other.data_)[k * N + j];
-            }
-            (*result->data_)[i * N + j] = sum;
-        }
-    }
+    auto result = BaseTensor<T>(result_shape);
+    matrixMultiply(this->data(), other.data(), result.data(), M, K, N);
+
+    // openBlasMultiply(this->data(), other.data(), result.data(), M, K, N);
+
+      
     return result;
 }
 template <typename T>
@@ -173,10 +179,10 @@ BaseTensor<T> BaseTensor<T>::broadcast_add(const BaseTensor<T>& other) const {
         throw std::runtime_error("Incompatible shapes for broadcast addition");
     }
 
-    auto result = std::make_shared<BaseTensor<T>>(shape_);
+    auto result = BaseTensor<T>(shape_);
     for (size_t i = 0; i < M; ++i) {
         for (size_t j = 0; j < N; ++j) {
-            (*result->data_)[i * N + j] = (*data_)[i * N + j] + (*other.data_)[j];
+            (*result.data_)[i * N + j] = (*data_)[i * N + j] + (*other.data_)[j];
         }
     }
     return result;
@@ -192,22 +198,56 @@ std::vector<T>& BaseTensor<T>::data() {
 
 template <typename T>
 BaseTensor<T>BaseTensor<T>::log() const {
-    auto result = std::make_shared<BaseTensor<T>>(shape_);
+    auto result = BaseTensor<T>(shape_);
     size_t size = compute_size();
     for (size_t i = 0; i < size; ++i) {
-        (*result->data_)[i] = std::log((*data_)[i]);
+        (*result.data_)[i] = std::log((*data_)[i]);
     }
     return result;
 }
 
 template <typename T>
 BaseTensor<T>BaseTensor<T>::neg() const {
-    auto result = std::make_shared<BaseTensor<T>>(shape_);
+    auto result = BaseTensor<T>(shape_);
     size_t size = compute_size();
     for (size_t i = 0; i < size; ++i) {
-        (*result->data_)[i] = -(*data_)[i];
+        (*result.data_)[i] = -(*data_)[i];
     }
     return result;
 }
+template <typename T>
+BaseTensor<T>BaseTensor<T>::operator*(T scalar){
+    auto result = BaseTensor<T>(shape_);
+    size_t size = compute_size();
+    for (size_t i = 0; i < size; ++i) {
+        (*result.data_)[i] = (*data_)[i] * scalar;
+    }
+    return result;
+}
+template<typename T>
+BaseTensor<T> operator*(T scalar, const BaseTensor<T>& tensor) {
+    BaseTensor<T> result(tensor.shape());
+    for (size_t i = 0; i < result.data().size(); ++i) {
+        result.data()[i] = scalar * tensor.data()[i];
+    }
+    return result;
+}
+// In your BaseTensor.h or BaseTensor.tpp file
+
+template <typename T>
+BaseTensor<T>& BaseTensor<T>::operator-=(const BaseTensor<T>& other) {
+    if (shape_ != other.shape_) {
+        throw std::runtime_error("Shape mismatch for in-place subtraction (-=)");
+    }
+
+    size_t size = compute_size();
+    for (size_t i = 0; i < size; ++i) {
+        (*data_)[i] -= (*other.data_)[i];
+    }
+
+    // Return a reference to the modified object
+    return *this;
+}
+
 
 #endif // BASE_TENSOR_TPP

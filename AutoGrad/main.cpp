@@ -4,10 +4,12 @@
 #include <iostream>
 #include <random>
 #include <stdexcept>
+#include <chrono>
+
 
 void print_shape(const std::vector<int>& shape) {
     std::cout << "[";
-    for (size_t i = 0; i < shape.size(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(shape.size()); ++i) {
         std::cout << shape[i];
         if (i < shape.size() - 1) std::cout << ", ";
     }
@@ -16,7 +18,7 @@ void print_shape(const std::vector<int>& shape) {
 
 void print_data(const std::vector<float>& data) {
     std::cout << "[";
-    for (size_t i = 0; i < data.size(); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(data.size()); ++i) {
         std::cout << data[i];
         if (i < data.size() - 1) std::cout << ", ";
     }
@@ -24,30 +26,45 @@ void print_data(const std::vector<float>& data) {
 }
 
 int main() {
-    // Initialize predictions (logits) with shape [2, 3] (batch_size=2, num_classes=3)
-    AutogradTensor<float> predictions({2, 3}, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, true);
-    
-    // Initialize one-hot encoded labels with shape [2, 3]
-    AutogradTensor<float> labels({2, 3}, {0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}, false);
-
-    // Print inputs
+    using namespace std::chrono;
 
 
-    // Compute cross-entropy loss using Loss class
-    auto loss = Loss<float>::cross_entropy_loss(predictions, labels);
-    std::cout << "Cross-entropy loss: " << loss.at({0}) << "\n";
 
-    // // Perform backpropagation
-    loss.backward();
-    // // std::cout << "Loss gradient: ";
-    // print_data(loss.grad());
-    // std::cout << "Predictions gradient: ";
-    print_data(predictions.grad());
+    // AutogradTensor<float> tensor1({2, 2}, {1, 2, 3, 4}, true);
+    // AutogradTensor<float> tensor2({2, 2}, {5, 6, 7, 8}, true);
 
+    // Start timer
+    auto start = high_resolution_clock::now();
+    AutogradTensor<float> tensor3({3,3},{1,2,3,4,5,6,7,8,9},true);
+    AutogradTensor<float> tensor4({3}, {1,2,3}, true);
+    auto result = tensor3.broadcast_add(tensor4);
+    result.backward();
+    print_data(result.grad().data());
+    print_data(tensor4.grad().data());
+    print_data(tensor3.grad().data());
+    print_data(result.data());
 
-    // // Print gradients
-    // std::cout << "Predictions gradient: ";
-    // print_data(predictions.grad());
+    // print_data(tensor3.data());
+
+    // Perform multiplication
+    // auto result = tensor1 * tensor2;
+    // result.backward();
+    // // print_data(result.grad().data());
+    // print_data(tensor1.grad().data());
+    // print_data(tensor2.grad().data());
+    // tensor1 -= tensor1.grad() * 0.1f;
+    // tensor2 -= tensor2.grad() * 0.1f;
+
+    // print_data(tensor1.data());
+    // print_data(tensor2.data());
+
+    // End timer
+    auto end = high_resolution_clock::now();
+    auto duration = duration_cast<microseconds>(end - start);
+
+    // Print result and timing
+    // print_data(result.data());
+    std::cout << "Multiplication took: " << duration.count() << " microseconds" << std::endl;
 
     return 0;
 }

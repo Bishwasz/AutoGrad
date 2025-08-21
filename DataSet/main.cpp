@@ -8,9 +8,9 @@
 void print_data(const AutogradTensor<float>& tensor) {
     std::cout << "Data: ";
     if(tensor.shape().size()>1){
-        for (size_t i = 0; i < tensor.shape()[0]; ++i) {
+        for (size_t i = 0; i <  static_cast<size_t>(tensor.shape()[0]); ++i) {
             std::cout << "[";
-            for (size_t j = 0; j < tensor.shape()[1]; ++j) {
+            for (size_t j = 0; j < static_cast<size_t>(tensor.shape()[1]); ++j) {
                 std::cout << tensor.at({static_cast<int>(i), static_cast<int>(j)});
                 if (j < tensor.shape()[1] - 1) std::cout << ", ";
             }
@@ -18,7 +18,7 @@ void print_data(const AutogradTensor<float>& tensor) {
             if (i < tensor.shape()[0] - 1) std::cout << "\n ";
         }
     } else {
-        for (size_t i = 0; i < tensor.shape()[0]; ++i) {
+        for (size_t i = 0; i < static_cast<size_t>(tensor.shape()[0]); ++i) {
             std::cout << tensor.at({static_cast<int>(i)});
             if (i < tensor.shape()[0] - 1) std::cout << ", ";
 
@@ -51,13 +51,16 @@ int main() {
         auto dataset = std::make_shared<MNISTDataset<float>>("mnist_train.csv");
         std::cout << "Dataset loaded with " << dataset->size() << " samples\n";
         
-        size_t batch_size = 10;
-        bool shuffle = false;
-        size_t num_workers = 5;
+        size_t batch_size = 32;
+        bool shuffle = true;
+        size_t num_workers = 4;
         
-        DataLoader<float> dataloader(dataset, batch_size, shuffle, num_workers);
+        DataLoader<float> dataloader(dataset, batch_size, shuffle,num_workers);
 
-        AutogradTensor<float> weigh1({784,10},true);
+        AutogradTensor<float> weigh1({784,200},true);
+        AutogradTensor<float> weigh2({200,10},true);
+        AutogradTensor<float> bias1({200},true);
+        AutogradTensor<float> bias2({10},true);
 
         int max_epochs = 1;
         for (int epoch = 0; epoch < max_epochs; ++epoch) {
@@ -72,17 +75,37 @@ int main() {
             if (!dataloader.next(batch)) {
                 break;
             }
+            // print_data(batch.first);
+            // print_data(batch.second);
 
-            auto prediction=batch.first * weigh1;
+            auto layer1= batch.first * weigh1 ;
+            auto layer1_int= layer1.broadcast_add(bias1);
+
+            auto layer2=layer1_int.relu();
+            auto prediction=layer2 * weigh2;
+            auto prediction_int= prediction.broadcast_add(bias2);
+
             auto labels = one_hot_encode(batch.second, 10, batch.first.shape()[0]);
-            auto loss = Loss<float>::cross_entropy_loss(prediction, labels);
-            print_data(loss);
+
+            auto loss = Loss<float>::cross_entropy_loss(prediction_int, labels);
             loss.backward();
-            std::cout<<"No fualt yet 4 in main.cpp"<<std::endl;
+            print_data(loss);
+
+            weigh1 -= weigh1.grad() * 0.03f;
+            weigh2 -= weigh2.grad() * 0.03f;
+            bias1 -= bias1.grad() * 0.03f;
+            bias2 -= bias2.grad() * 0.03f;
+
+            weigh1.grad().zero_data(); // Reset gradients after each batch
+            weigh2.grad().zero_data(); // Reset gradients after each batch
+            bias1.grad().zero_data(); // Reset gradients after each batch
+            bias2.grad().zero_data(); // Reset gradients after each batch
+
             batch_count++;
-            if (batch_count > 0) {
+            if(batch_count>600) {
                 break;
             }
+
         }
                 
             auto end_time = std::chrono::high_resolution_clock::now();
